@@ -9,15 +9,15 @@ error_code = {
     517: "stock level low, book id {}",
     518: "invalid order id {}",
     519: "not sufficient funds, order id {}",
-    520: "",
-    521: "",
-    522: "",
-    523: "",
-    524: "",
+    520: "not find history order",
+    521: "auto cancel order fail",
+    522: "not find books in store",
+    523: "no books found",
+    524: "update order failure",
     525: "",
     526: "",
     527: "",
-    528: "",
+    528: "mongodb connection faliure",
 }
 
 
@@ -63,3 +63,18 @@ def error_authorization_fail():
 
 def error_and_message(code, message):
     return code, message
+
+def error_not_find_history_order(user_id):
+    return 520, error_code[520].format(user_id)
+
+def error_cancel_order_fail():
+    return 521, error_code[521]
+
+def error_not_find_books_in_store(store_id):
+    return 522, error_code[522].format(store_id)
+
+def error_no_books_found(keyword):
+    return 523, error_code[523].format(keyword)
+
+def error_update_order_failure(order_id):
+    return 523, error_code[524].format(order_id)

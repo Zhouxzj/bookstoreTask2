@@ -5,6 +5,15 @@ import sqlite3 as sqlite
 from be.model import error
 from be.model import db_conn
 
+import uuid
+import json
+import traceback
+import psycopg2
+from psycopg2 import sql, errors
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
+
 # encode a json string like:
 #   {
 #       "user_id": [user name],
@@ -19,7 +28,7 @@ def jwt_encode(user_id: str, terminal: str) -> str:
         key=user_id,
         algorithm="HS256",
     )
-    return encoded.decode("utf-8")
+    return encoded
 
 
 # decode a JWT to a json string like:
@@ -33,11 +42,11 @@ def jwt_decode(encoded_token, user_id: str) -> str:
     return decoded
 
 
-class User(db_conn.DBConn):
+class User(db_conn.dbConn):
     token_lifetime: int = 3600  # 3600 second
 
     def __init__(self):
-        db_conn.DBConn.__init__(self)
+        super().__init__()
 
     def __check_token(self, user_id, db_token, token) -> bool:
         try:
@@ -57,19 +66,45 @@ class User(db_conn.DBConn):
         try:
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            self.conn.execute(
-                "INSERT into user(user_id, password, balance, token, terminal) "
-                "VALUES (?, ?, ?, ?, ?);",
-                (user_id, password, 0, token, terminal),
-            )
+
+            account = 0
+            address = None
+            shops = None
+            orders = None
+            sql = """
+            select * from userdb where user_id = :user_id;
+            """
+            result = self.conn.execute(text(sql), {'user_id': user_id})
+            row = result.fetchone()
+
+            if row is not None:
+                return error.error_exist_user_id(user_id)
+
+            self.conn.execute(text("""
+                INSERT into userdb (user_id, password, token, terminal, account, address, shops, orders) 
+                VALUES (:user_id, :password, :token, :terminal, :account, :address, :shops, :orders)
+                """) , {
+            'user_id': user_id,
+            'password': password,
+            'token': token,
+            'terminal': terminal,
+            'account': account,
+            'address': address,
+            'shops': shops,
+            'orders': orders
+        })
+
             self.conn.commit()
-        except sqlite.Error:
-            return error.error_exist_user_id(user_id)
+        except SQLAlchemyError as e:
+            self.conn.rollback()
+            print("PostgreSQL Error: " + str(e))
+            return 528, "{}".format(str(e)), ""
         return 200, "ok"
 
     def check_token(self, user_id: str, token: str) -> (int, str):
-        cursor = self.conn.execute("SELECT token from user where user_id=?", (user_id,))
-        row = cursor.fetchone()
+        result = self.conn.execute(text("""SELECT token from userdb where user_id = :user_id;"""),
+                          {'user_id': user_id})
+        row = result.fetchone()
         if row is None:
             return error.error_authorization_fail()
         db_token = row[0]
@@ -78,10 +113,9 @@ class User(db_conn.DBConn):
         return 200, "ok"
 
     def check_password(self, user_id: str, password: str) -> (int, str):
-        cursor = self.conn.execute(
-            "SELECT password from user where user_id=?", (user_id,)
-        )
-        row = cursor.fetchone()
+        result = self.conn.execute(text("""SELECT password from userdb where user_id = :user_id;"""),
+                          {'user_id': user_id})
+        row = result.fetchone()
         if row is None:
             return error.error_authorization_fail()
 
@@ -97,18 +131,29 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message, ""
 
+            # # Start a transaction to ensure atomicity
+            # self.conn.begin()
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set token= ? , terminal = ? where user_id = ?",
-                (token, terminal, user_id),
-            )
-            if cursor.rowcount == 0:
+            sql = """
+            UPDATE userdb 
+            SET token = :token, terminal = :terminal 
+            WHERE user_id = :user_id;
+            """
+            result = self.conn.execute(text(sql),{'token': token, 'terminal': terminal, 'user_id': user_id})
+
+            if result.rowcount == 0:
                 return error.error_authorization_fail() + ("",)
             self.conn.commit()
-        except sqlite.Error as e:
+        except SQLAlchemyError as e:
+            self.conn.rollback()
+            print("PostgreSQL Error: " + str(e))
             return 528, "{}".format(str(e)), ""
-        except BaseException as e:
+        except Exception as e:
+            self.conn.rollback()
+            print("Error: " + str(e))
+            logging.info("530, {}".format(str(e)))
             return 530, "{}".format(str(e)), ""
+
         return 200, "ok", token
 
     def logout(self, user_id: str, token: str) -> bool:
@@ -117,21 +162,32 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message
 
+            # # Start a transaction to ensure atomicity
+            # self.conn.begin()
             terminal = "terminal_{}".format(str(time.time()))
             dummy_token = jwt_encode(user_id, terminal)
 
-            cursor = self.conn.execute(
-                "UPDATE user SET token = ?, terminal = ? WHERE user_id=?",
-                (dummy_token, terminal, user_id),
-            )
-            if cursor.rowcount == 0:
+            sql = """
+            UPDATE userdb 
+            SET token = :token, terminal = :terminal 
+            WHERE user_id = :user_id;
+            """
+            result = self.conn.execute(text(sql),{'token': dummy_token, 'terminal': terminal, 'user_id': user_id})
+
+            if result.rowcount == 0:
                 return error.error_authorization_fail()
 
             self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+        except SQLAlchemyError as e:
+            self.conn.rollback()
+            print("PostgreSQL Error: " + str(e))
+            return 528, "{}".format(str(e)), ""
+        except Exception as e:
+            self.conn.rollback()
+            print("Error: " + str(e))
+            logging.info("530, {}".format(str(e)))
+            return 530, "{}".format(str(e)), ""
+
         return 200, "ok"
 
     def unregister(self, user_id: str, password: str) -> (int, str):
@@ -140,15 +196,25 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message
 
-            cursor = self.conn.execute("DELETE from user where user_id=?", (user_id,))
-            if cursor.rowcount == 1:
+            # # Start a transaction to ensure atomicity
+            # self.conn.begin()
+            result = self.conn.execute(text("""DELETE from userdb where user_id = :user_id;"""),
+                                {'user_id': user_id})
+            if result.rowcount == 1:
                 self.conn.commit()
             else:
                 return error.error_authorization_fail()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+
+
+        except SQLAlchemyError as e:
+            self.conn.rollback()
+            print("PostgreSQL Error: " + str(e))
+            return 528, "{}".format(str(e)), ""
+        except Exception as e:
+            self.conn.rollback()
+            print("Error: " + str(e))
+            logging.info("530, {}".format(str(e)))
+            return 530, "{}".format(str(e)), ""
         return 200, "ok"
 
     def change_password(
@@ -159,18 +225,31 @@ class User(db_conn.DBConn):
             if code != 200:
                 return code, message
 
+            # # Start a transaction to ensure atomicity
+            # self.conn.begin()
+
             terminal = "terminal_{}".format(str(time.time()))
             token = jwt_encode(user_id, terminal)
-            cursor = self.conn.execute(
-                "UPDATE user set password = ?, token= ? , terminal = ? where user_id = ?",
-                (new_password, token, terminal, user_id),
-            )
-            if cursor.rowcount == 0:
+            sql = """
+            UPDATE userdb 
+            SET password = :password, token = :token, terminal = :terminal 
+            WHERE user_id = :user_id;
+            """
+            result = self.conn.execute(text(sql),
+                    {'password': new_password, 'token':token, 'terminal': terminal, 'user_id': user_id})
+            if result.rowcount == 0:
                 return error.error_authorization_fail()
 
             self.conn.commit()
-        except sqlite.Error as e:
-            return 528, "{}".format(str(e))
-        except BaseException as e:
-            return 530, "{}".format(str(e))
+
+
+        except SQLAlchemyError as e:
+            self.conn.rollback()
+            print("PostgreSQL Error: " + str(e))
+            return 528, "{}".format(str(e)), ""
+        except Exception as e:
+            self.conn.rollback()
+            print("Error: " + str(e))
+            logging.info("530, {}".format(str(e)))
+            return 530, "{}".format(str(e)), ""
         return 200, "ok"

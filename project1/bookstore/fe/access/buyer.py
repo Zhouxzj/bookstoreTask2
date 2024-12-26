@@ -48,3 +48,53 @@ class Buyer:
         headers = {"token": self.token}
         r = requests.post(url, headers=headers, json=json)
         return r.status_code
+
+    # 40%
+    def search_books(self, keyword: str, store_id: str) -> int:
+        json = {
+            "user_id": self.user_id,
+            "password": self.password,
+            "keyword": keyword,
+            "store_id": store_id,
+        }
+        url = urljoin(self.url_prefix, "search_books")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code
+
+    def receive(self, order_id: str) -> int:
+        json = {
+            "user_id": self.user_id,
+            "order_id": order_id,
+        }
+        url = urljoin(self.url_prefix, "receive")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code
+
+    def search_history_order(self) -> int:
+        json = {
+            "user_id": self.user_id,
+            "password": self.password,
+        }
+        url = urljoin(self.url_prefix, "search_history_order")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code
+
+    def buyer_cancel_order(self, order_id: str) -> int:
+        json = {
+            "user_id": self.user_id,
+            "order_id": order_id,
+        }
+        url = urljoin(self.url_prefix, "buyer_cancel_order")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code
+
+    def auto_cancel_order(self) -> int:
+        json = {}
+        url = urljoin(self.url_prefix, "auto_cancel_order")
+        headers = {"token": self.token}
+        r = requests.post(url, headers=headers, json=json)
+        return r.status_code

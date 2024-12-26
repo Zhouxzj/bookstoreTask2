@@ -42,6 +42,7 @@ def unregister():
     password = request.json.get("password", "")
     u = user.User()
     code, message = u.unregister(user_id=user_id, password=password)
+    print(str(message) + "\n")
     return jsonify({"message": message}), code
 
 
